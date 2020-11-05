@@ -304,7 +304,7 @@ function config_cubrid_without_ha()
      if [ "$cubrid_conf_para" ];then
      	ini -s common -u "${cubrid_conf_para}" $CUBRID/conf/cubrid.conf
      fi
-     ini -s service -u "service=server,broker" $CUBRID/conf/cubrid.conf
+     ini -s service -u "service=server,broker,javasp" $CUBRID/conf/cubrid.conf
      cubrid_broker_shm=`ini -s "sql/cubrid_broker.conf/broker" --separator="||" ${config_file_main}` 
      if [ "$cubrid_broker_shm" ];then
      	ini -s "broker" -u $cubrid_broker_shm $CUBRID/conf/cubrid_broker.conf
@@ -453,6 +453,7 @@ function stop_db()
          cubrid hb stop $1 2>&1 > /dev/null
      else
          cubrid server stop $1 2>&1 > /dev/null
+         cubrid javasp stop $1 2>&1 > /dev/null
      fi
 
      sleep 2
@@ -508,6 +509,7 @@ function start_db()
      cubrid service stop
      sleep 1
      cubrid service start
+	 cubrid service status > 2>&1 >> $log_filename
      sleep 1
      echo "start database $1"
      cnt=`cat $CUBRID/conf/cubrid.conf | grep -v "#" | grep ha_mode | grep -E 'on|yes' | wc -l `
@@ -516,6 +518,7 @@ function start_db()
          cubrid hb start $1 2>&1 >> $log_filename
      else
          cubrid server start $1 2>&1 >> $log_filename
+         cubrid javasp start $1 2>&1 >> $log_filename
      fi
      sleep 2
 }
