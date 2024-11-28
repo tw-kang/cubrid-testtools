@@ -559,26 +559,30 @@ function write_ok
 
 function write_nok
 {
-  if [ -z "$1" ]
-  then 
-        echo "----------------- $case_no : NOK"
-        echo "$case_name-$case_no : NOK" >> ${cur_path}/$result_file
+    caller_info=($(caller 0))
+    line_no=${caller_info[0]}
+    file_name=${0##*/}
+
+    if [ -z "$1" ]
+    then 
+        echo "----------------- $case_no : NOK (at ${file_name}:${line_no})"
+        echo "$case_name-$case_no : NOK (at ${file_name}:${line_no})" >> ${cur_path}/$result_file
         internal_err=`grep "Internal Error" $CUBRID/log/server/*.err | wc -l`
-  	if [ $internal_err -gt 0 ]
- 	then
-  	    grep "Internal Error" $CUBRID/log/server/*.err >> ${cur_path}/$result_file
- 	fi 
+        if [ $internal_err -gt 0 ]
+        then
+            grep "Internal Error" $CUBRID/log/server/*.err >> ${cur_path}/$result_file
+        fi 
         let "case_no = case_no + 1"
-  elif [ -f "$1" ]; 
-  then
-	echo "$case_name-$case_no : NOK"  >> ${cur_path}/$result_file
-	cat $1 >> ${cur_path}/$result_file
-	let "case_no = case_no + 1"
-  else
-        echo "----------------- $case_no : NOK" $1
-        echo "$case_name-$case_no : NOK" $1 >> ${cur_path}/$result_file
+    elif [ -f "$1" ]; 
+    then
+        echo "$case_name-$case_no : NOK (at ${file_name}:${line_no})"  >> ${cur_path}/$result_file
+        cat $1 >> ${cur_path}/$result_file
         let "case_no = case_no + 1"
-  fi
+    else
+        echo "----------------- $case_no : NOK $1 (at ${file_name}:${line_no})"
+        echo "$case_name-$case_no : NOK $1 (at ${file_name}:${line_no})" >> ${cur_path}/$result_file
+        let "case_no = case_no + 1"
+    fi
 }
 
 # This function removes temporary & log files
