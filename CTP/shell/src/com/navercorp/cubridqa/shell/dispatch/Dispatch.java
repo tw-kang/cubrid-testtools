@@ -30,6 +30,8 @@ import java.io.File;
 import java.io.FilenameFilter;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 
 import com.navercorp.cubridqa.shell.common.CommonUtils;
 import com.navercorp.cubridqa.shell.common.Log;
@@ -39,6 +41,42 @@ import com.navercorp.cubridqa.shell.main.Context;
 import com.navercorp.cubridqa.shell.main.ShellHelper;
 
 public class Dispatch {
+
+	public static class DispatchWorkItem {
+		private final String testCase;
+		private final int retryCount;
+
+		public DispatchWorkItem(String testCase, int retryCount) {
+			this.testCase = testCase;
+			this.retryCount = retryCount;
+		}
+
+		public String getTestCase() {
+			return testCase;
+		}
+
+		public int getRetryCount() {
+			return retryCount;
+		}
+	}
+
+	public static class DispatchCompletion {
+		private final boolean accepted;
+		private final boolean terminal;
+
+		public DispatchCompletion(boolean accepted, boolean terminal) {
+			this.accepted = accepted;
+			this.terminal = terminal;
+		}
+
+		public boolean isAccepted() {
+			return accepted;
+		}
+
+		public boolean isTerminal() {
+			return terminal;
+		}
+	}
 
 	public static Dispatch instance;
 
@@ -54,6 +92,13 @@ public class Dispatch {
 	private int tempSkippedSize = 0;
 
 	private int nextTestFileIndex;
+	private ArrayList<DispatchWorkItem> currentRetryQueue;
+	private ArrayList<DispatchWorkItem> nextRetryQueue;
+	private int nextRetryQueueIndex;
+	private int inFlightNormalCount;
+	private int inFlightRetryCount;
+	private HashMap<String, Integer> runningRetryCounts;
+	private HashSet<String> finishedCases;
 	private Log all;
 
 	private boolean isFinished;
@@ -64,6 +109,13 @@ public class Dispatch {
 		this.totalTbdSize = 0;
 		this.isFinished = false;
 		this.nextTestFileIndex = -1;
+		this.currentRetryQueue = new ArrayList<DispatchWorkItem>();
+		this.nextRetryQueue = new ArrayList<DispatchWorkItem>();
+		this.nextRetryQueueIndex = 0;
+		this.inFlightNormalCount = 0;
+		this.inFlightRetryCount = 0;
+		this.runningRetryCounts = new HashMap<String, Integer>();
+		this.finishedCases = new HashSet<String>();
 		load();
 	}
 
@@ -75,21 +127,100 @@ public class Dispatch {
 		return instance;
 	}
 
-	public synchronized String nextTestFile() {
+	public synchronized DispatchWorkItem nextWorkItem() {
 
-		if (isFinished)
-			return null;
-
-		if (totalTbdSize == 0 || this.nextTestFileIndex >= totalTbdSize) {
-			isFinished = true;
+		refreshFinishedState();
+		if (isFinished) {
 			return null;
 		}
+
 		if (this.nextTestFileIndex < 0) {
 			this.nextTestFileIndex = 0;
 		}
-		String nextTestFile = tbdList.get(this.nextTestFileIndex);
-		this.nextTestFileIndex++;
-		return nextTestFile;
+
+		if (this.nextTestFileIndex < totalTbdSize) {
+			DispatchWorkItem item = new DispatchWorkItem(tbdList.get(this.nextTestFileIndex), 0);
+			this.nextTestFileIndex++;
+			this.inFlightNormalCount++;
+			this.runningRetryCounts.put(item.getTestCase(), Integer.valueOf(item.getRetryCount()));
+			refreshFinishedState();
+			return item;
+		}
+
+		if (this.inFlightNormalCount > 0) {
+			refreshFinishedState();
+			return null;
+		}
+
+		if (this.nextRetryQueueIndex < this.currentRetryQueue.size()) {
+			DispatchWorkItem item = this.currentRetryQueue.get(this.nextRetryQueueIndex);
+			this.nextRetryQueueIndex++;
+			this.inFlightRetryCount++;
+			this.runningRetryCounts.put(item.getTestCase(), Integer.valueOf(item.getRetryCount()));
+			refreshFinishedState();
+			return item;
+		}
+
+		if (this.inFlightRetryCount > 0) {
+			refreshFinishedState();
+			return null;
+		}
+
+		if (this.nextRetryQueue.size() > 0) {
+			this.currentRetryQueue = this.nextRetryQueue;
+			this.nextRetryQueue = new ArrayList<DispatchWorkItem>();
+			this.nextRetryQueueIndex = 0;
+			return nextWorkItem();
+		}
+
+		refreshFinishedState();
+		return null;
+	}
+
+	public synchronized DispatchCompletion completeWorkItem(DispatchWorkItem item, boolean success, boolean hasCore) {
+
+		if (item == null) {
+			refreshFinishedState();
+			return new DispatchCompletion(false, false);
+		}
+
+		Integer runningRetryCount = this.runningRetryCounts.get(item.getTestCase());
+		if (runningRetryCount == null || runningRetryCount.intValue() != item.getRetryCount() || this.finishedCases.contains(item.getTestCase())) {
+			refreshFinishedState();
+			return new DispatchCompletion(false, false);
+		}
+
+		this.runningRetryCounts.remove(item.getTestCase());
+		if (item.getRetryCount() == 0) {
+			this.inFlightNormalCount--;
+		} else {
+			this.inFlightRetryCount--;
+		}
+
+		boolean terminal = isTerminal(item, success, hasCore);
+		if (terminal) {
+			this.finishedCases.add(item.getTestCase());
+		} else {
+			DispatchWorkItem nextRetryItem = new DispatchWorkItem(item.getTestCase(), item.getRetryCount() + 1);
+			if (item.getRetryCount() == 0) {
+				this.currentRetryQueue.add(nextRetryItem);
+			} else {
+				this.nextRetryQueue.add(nextRetryItem);
+			}
+		}
+
+		refreshFinishedState();
+		return new DispatchCompletion(true, terminal);
+	}
+
+	private boolean isTerminal(DispatchWorkItem item, boolean success, boolean hasCore) {
+		return success || hasCore || item.getRetryCount() >= context.getMaxRetryCount();
+	}
+
+	private void refreshFinishedState() {
+		boolean normalExhausted = this.totalTbdSize == 0 || (this.nextTestFileIndex >= 0 && this.nextTestFileIndex >= this.totalTbdSize);
+		boolean retryExhausted = this.nextRetryQueueIndex >= this.currentRetryQueue.size() && this.nextRetryQueue.size() == 0;
+		this.isFinished = normalExhausted && this.inFlightNormalCount == 0 && this.inFlightRetryCount == 0 && retryExhausted;
 	}
 
 	private void load() throws Exception {
@@ -159,9 +290,7 @@ public class Dispatch {
 		}
 		this.nextTestFileIndex = -1;
 		this.totalTbdSize = this.tbdList.size();
-		if (this.totalTbdSize == 0) {
-			this.isFinished = true;
-		}
+		refreshFinishedState();
 	}
 
 	private static String getAllTestCaseScripts(String dir) {
@@ -336,7 +465,8 @@ public class Dispatch {
 		return totalTbdSize;
 	}
 
-	public boolean isFinished() {
+	public synchronized boolean isFinished() {
+		refreshFinishedState();
 		return this.isFinished;
 	}
 

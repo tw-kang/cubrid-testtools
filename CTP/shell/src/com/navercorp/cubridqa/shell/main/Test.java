@@ -86,12 +86,15 @@ public class Test {
 
 		System.out.println("[ENV START] " + currEnvId);
 
-		String testCase;
 		Long endTime;
 		String consoleOutput;
 
 		int p;
-		while (!shouldStop && !Dispatch.getInstance().isFinished()) {
+		while (!shouldStop) {
+
+			if (Dispatch.getInstance().isFinished()) {
+				break;
+			}
 
 			if (this.context.getServiceProtocolType() != null && this.context.getServiceProtocolType().equals(SSHConnect.SERVICE_TYPE_RMI)) {
 				ShellScriptInput aliveScript = new ShellScriptInput("echo HELLO");
@@ -107,52 +110,56 @@ public class Test {
 				}
 			}
 
-			testCase = Dispatch.getInstance().nextTestFile();
-			if (testCase == null) {
-				break;
+			Dispatch.DispatchWorkItem workItem = Dispatch.getInstance().nextWorkItem();
+			if (workItem == null) {
+				if (Dispatch.getInstance().isFinished()) {
+					break;
+				}
+				CommonUtils.sleep(1);
+				continue;
 			}
 
+			String testCase = workItem.getTestCase();
+			int retryCount = workItem.getRetryCount();
 			consoleOutput = "";
-			this.testCaseFullName = testCase;
-			p = testCase.lastIndexOf("cases");
-			this.testCaseDir = testCase.substring(0, p + 5);
-			this.testCaseName = testCase.substring(p + 6);
-			this.testCaseResultName = testCaseName.substring(0, testCaseName.lastIndexOf(".sh")) + ".result";
+			try {
+				this.testCaseFullName = testCase;
+				p = testCase.lastIndexOf("cases");
+				this.testCaseDir = testCase.substring(0, p + 5);
+				this.testCaseName = testCase.substring(p + 6);
+				this.testCaseResultName = testCaseName.substring(0, testCaseName.lastIndexOf(".sh")) + ".result";
 
-			context.getFeedback().onTestCaseStartEvent(this.testCaseFullName, envIdentify);
-
-			workerLog.println("[TESTCASE] " + this.testCaseFullName);
-
-			boolean needRetry = true;
-			int retryCount = 0;
-
-			do {
-				/*
-				 * Reset test environment Kill CUBRID process, clear SSH and
-				 * clear result item list
-				 */
-				resetProcess();
-				resetCUBRID();
-				resetSSH();
-				startTime = -1;
-				if (this.context.enableCheckDiskSpace()) {
-					checkDiskSpace();
+				if (retryCount == 0) {
+					context.getFeedback().onTestCaseStartEvent(this.testCaseFullName, envIdentify);
 				}
 
+				workerLog.println("[TESTCASE] " + this.testCaseFullName);
+
 				resultItemList.clear();
-				startTime = System.currentTimeMillis();
+				startTime = -1;
 				this.isTimeOut = false;
 				this.testCaseSuccess = true;
 				this.hasCore = false;
 
 				try {
+					resetProcess();
+					resetCUBRID();
+					resetSSH();
+					if (this.context.enableCheckDiskSpace()) {
+						checkDiskSpace();
+					}
+
+					startTime = System.currentTimeMillis();
 					consoleOutput = runTestCase();
 					doFinalCheck();
 					collectGeneralResult();
 				} catch (Exception e) {
+					this.testCaseSuccess = false;
+					this.hasCore = false;
 					this.addResultItem("NOK", "Runtime error (" + e.getMessage() + ")");
 				} finally {
 					endTime = System.currentTimeMillis();
+					long elapseTime = startTime < 0 ? 0 : endTime - startTime;
 
 					StringBuffer resultCont = new StringBuffer();
 					for (String item : this.resultItemList) {
@@ -176,55 +183,51 @@ public class Test {
 						resultCont.append(saveErrorLogResult).append(Constants.LINE_SEPARATOR);
 					}
 					if (testCaseSuccess == false) {
-						// System.out.println("Execute retry Time - " +
-						// retryCount + ", Max retry count - " + maxRetryCount);
-						// workerLog.println("Execute retry Time - " +
-						// retryCount + ", Max retry count - " + maxRetryCount);
-						if (hasCore) {
-							needRetry = false;
-						} else {
-							needRetry = true;
-						}
-
 						resultCont.append("============================= CONSOLE OUTPUT =============================").append(Constants.LINE_SEPARATOR);
 						resultCont.append(consoleOutput);
-
-					} else {
-						needRetry = false;
-					}
-					// If retryCount already reach the maxRetryCount, tool need
-					// stop retry
-					if (retryCount >= maxRetryCount) {
-						needRetry = false;
 					}
 
 					String resultContString = resultCont.toString();
 					String lastPassResultCont = buildLastPassResultCont(resultContString, consoleOutput, testCaseSuccess);
+					Dispatch.DispatchCompletion completion = Dispatch.getInstance().completeWorkItem(workItem, testCaseSuccess, hasCore);
 
-					if (needRetry) {
-						/*
-						 * For each testing, the retry count just will be
-						 * updated as 1.
-						 */
-						context.getFeedback().onTestCaseStopEventForRetry(this.testCaseFullName, testCaseSuccess, endTime - startTime, resultContString, envIdentify, isTimeOut, hasCore,
-								Constants.SKIP_TYPE_NO, retryCount);
-					} else {
-						context.getFeedback().onTestCaseStopEvent(this.testCaseFullName, testCaseSuccess, endTime - startTime, resultContString, lastPassResultCont, envIdentify, isTimeOut, hasCore,
-								Constants.SKIP_TYPE_NO, retryCount);
-						System.out.println("[TESTCASE] " + this.testCaseFullName + " EnvId=" + this.currEnvId + " "
-								+ (testCaseSuccess ? "[OK]" : "[NOK]" + (this.maxRetryCount != 0 ? ", " + Constants.RETRY_FLAG + retryCount : "")));
+					if (completion.isAccepted()) {
+						if (completion.isTerminal()) {
+							context.getFeedback().onTestCaseStopEvent(this.testCaseFullName, testCaseSuccess, elapseTime, resultContString, lastPassResultCont, envIdentify, isTimeOut, hasCore,
+									Constants.SKIP_TYPE_NO, retryCount);
+							System.out.println("[TESTCASE] " + this.testCaseFullName + " EnvId=" + this.currEnvId + " "
+									+ (testCaseSuccess ? "[OK]" : "[NOK]" + (this.maxRetryCount != 0 ? ", " + Constants.RETRY_FLAG + retryCount : "")));
+							dispatchLog.println(this.testCaseFullName);
+						} else {
+							context.getFeedback().onTestCaseStopEventForRetry(this.testCaseFullName, testCaseSuccess, elapseTime, resultContString, envIdentify, isTimeOut, hasCore,
+									Constants.SKIP_TYPE_NO, retryCount);
+						}
+						if (needDropTestCase) {
+							dropTestCaseAfterTest();
+						}
 					}
 
 					workerLog.println("");
-					retryCount++;
-
 				}
-			} while (needRetry);
-
-			if (needDropTestCase) {
-				dropTestCaseAfterTest();
+			} catch (Exception e) {
+				Dispatch.DispatchCompletion completion = Dispatch.getInstance().completeWorkItem(workItem, false, false);
+				if (completion.isAccepted()) {
+					String failureCont = "Runtime error (" + e.getMessage() + ")";
+					if (completion.isTerminal()) {
+						context.getFeedback().onTestCaseStopEvent(this.testCaseFullName == null ? testCase : this.testCaseFullName, false, 0, failureCont, failureCont, envIdentify, false, false,
+								Constants.SKIP_TYPE_NO, retryCount);
+						dispatchLog.println(this.testCaseFullName == null ? testCase : this.testCaseFullName);
+					} else {
+						context.getFeedback().onTestCaseStopEventForRetry(this.testCaseFullName == null ? testCase : this.testCaseFullName, false, 0, failureCont, envIdentify, false, false,
+								Constants.SKIP_TYPE_NO, retryCount);
+					}
+					if (needDropTestCase) {
+						dropTestCaseAfterTest();
+					}
+				}
+				workerLog.println("Runtime error (" + e.getMessage() + ")");
+				workerLog.println("");
 			}
-			dispatchLog.println(this.testCaseFullName);
 		}
 
 		close();
