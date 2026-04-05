@@ -115,6 +115,12 @@ public class Test {
 				if (Dispatch.getInstance().isFinished()) {
 					break;
 				}
+				this.startTime = -1;
+				this.testCaseFullName = null;
+				this.testCaseName = null;
+				this.testCaseDir = null;
+				this.testCaseResultName = null;
+				this.isTimeOut = false;
 				CommonUtils.sleep(1);
 				continue;
 			}
