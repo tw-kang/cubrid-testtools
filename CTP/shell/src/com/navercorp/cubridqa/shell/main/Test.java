@@ -204,12 +204,12 @@ public class Test {
 							System.out.println("[TESTCASE] " + this.testCaseFullName + " EnvId=" + this.currEnvId + " "
 									+ (testCaseSuccess ? "[OK]" : "[NOK]" + (this.maxRetryCount != 0 ? ", " + Constants.RETRY_FLAG + retryCount : "")));
 							dispatchLog.println(this.testCaseFullName);
+							if (needDropTestCase) {
+								dropTestCaseAfterTest();
+							}
 						} else {
 							context.getFeedback().onTestCaseStopEventForRetry(this.testCaseFullName, testCaseSuccess, elapseTime, resultContString, envIdentify, isTimeOut, hasCore,
 									Constants.SKIP_TYPE_NO, retryCount);
-						}
-						if (needDropTestCase) {
-							dropTestCaseAfterTest();
 						}
 					}
 
@@ -223,12 +223,12 @@ public class Test {
 						context.getFeedback().onTestCaseStopEvent(this.testCaseFullName == null ? testCase : this.testCaseFullName, false, 0, failureCont, failureCont, envIdentify, false, false,
 								Constants.SKIP_TYPE_NO, retryCount);
 						dispatchLog.println(this.testCaseFullName == null ? testCase : this.testCaseFullName);
+						if (needDropTestCase) {
+							dropTestCaseAfterTest();
+						}
 					} else {
 						context.getFeedback().onTestCaseStopEventForRetry(this.testCaseFullName == null ? testCase : this.testCaseFullName, false, 0, failureCont, envIdentify, false, false,
 								Constants.SKIP_TYPE_NO, retryCount);
-					}
-					if (needDropTestCase) {
-						dropTestCaseAfterTest();
 					}
 				}
 				workerLog.println("Runtime error (" + e.getMessage() + ")");
