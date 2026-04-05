@@ -92,9 +92,9 @@ public class Dispatch {
 	private int tempSkippedSize = 0;
 
 	private int nextTestFileIndex;
-	private ArrayList<DispatchWorkItem> currentRetryQueue;
-	private ArrayList<DispatchWorkItem> nextRetryQueue;
+	private ArrayList<DispatchWorkItem> retryQueue;
 	private int nextRetryQueueIndex;
+	private int currentRetryRoundEnd;
 	private int inFlightNormalCount;
 	private int inFlightRetryCount;
 	private HashMap<String, Integer> runningRetryCounts;
@@ -109,9 +109,9 @@ public class Dispatch {
 		this.totalTbdSize = 0;
 		this.isFinished = false;
 		this.nextTestFileIndex = -1;
-		this.currentRetryQueue = new ArrayList<DispatchWorkItem>();
-		this.nextRetryQueue = new ArrayList<DispatchWorkItem>();
+		this.retryQueue = new ArrayList<DispatchWorkItem>();
 		this.nextRetryQueueIndex = 0;
+		this.currentRetryRoundEnd = 0;
 		this.inFlightNormalCount = 0;
 		this.inFlightRetryCount = 0;
 		this.runningRetryCounts = new HashMap<String, Integer>();
@@ -152,8 +152,8 @@ public class Dispatch {
 			return null;
 		}
 
-		if (this.nextRetryQueueIndex < this.currentRetryQueue.size()) {
-			DispatchWorkItem item = this.currentRetryQueue.get(this.nextRetryQueueIndex);
+		if (this.nextRetryQueueIndex < this.currentRetryRoundEnd) {
+			DispatchWorkItem item = this.retryQueue.get(this.nextRetryQueueIndex);
 			this.nextRetryQueueIndex++;
 			this.inFlightRetryCount++;
 			this.runningRetryCounts.put(item.getTestCase(), Integer.valueOf(item.getRetryCount()));
@@ -166,11 +166,14 @@ public class Dispatch {
 			return null;
 		}
 
-		if (this.nextRetryQueue.size() > 0) {
-			this.currentRetryQueue = this.nextRetryQueue;
-			this.nextRetryQueue = new ArrayList<DispatchWorkItem>();
-			this.nextRetryQueueIndex = 0;
-			return nextWorkItem();
+		if (this.currentRetryRoundEnd < this.retryQueue.size()) {
+			this.currentRetryRoundEnd = this.retryQueue.size();
+			DispatchWorkItem item = this.retryQueue.get(this.nextRetryQueueIndex);
+			this.nextRetryQueueIndex++;
+			this.inFlightRetryCount++;
+			this.runningRetryCounts.put(item.getTestCase(), Integer.valueOf(item.getRetryCount()));
+			refreshFinishedState();
+			return item;
 		}
 
 		refreshFinishedState();
@@ -201,12 +204,7 @@ public class Dispatch {
 		if (terminal) {
 			this.finishedCases.add(item.getTestCase());
 		} else {
-			DispatchWorkItem nextRetryItem = new DispatchWorkItem(item.getTestCase(), item.getRetryCount() + 1);
-			if (item.getRetryCount() == 0) {
-				this.currentRetryQueue.add(nextRetryItem);
-			} else {
-				this.nextRetryQueue.add(nextRetryItem);
-			}
+			this.retryQueue.add(new DispatchWorkItem(item.getTestCase(), item.getRetryCount() + 1));
 		}
 
 		refreshFinishedState();
@@ -219,8 +217,8 @@ public class Dispatch {
 
 	private void refreshFinishedState() {
 		boolean normalExhausted = this.totalTbdSize == 0 || (this.nextTestFileIndex >= 0 && this.nextTestFileIndex >= this.totalTbdSize);
-		boolean retryExhausted = this.nextRetryQueueIndex >= this.currentRetryQueue.size() && this.nextRetryQueue.size() == 0;
-		this.isFinished = normalExhausted && this.inFlightNormalCount == 0 && this.inFlightRetryCount == 0 && retryExhausted;
+		boolean retryExhausted = this.nextRetryQueueIndex >= this.retryQueue.size();
+		this.isFinished = normalExhausted && retryExhausted && this.runningRetryCounts.isEmpty();
 	}
 
 	private void load() throws Exception {
